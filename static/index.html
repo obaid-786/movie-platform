@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Platform</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Auth forms -->
+        <div id="auth-section" class="container">
+            <div class="auth-card">
+                <h2>Movie Platform</h2>
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="login">Login</button>
+                    <button class="tab-btn" data-tab="register">Register</button>
+                </div>
+                <form id="login-form">
+                    <input type="email" id="login-email" placeholder="Email" required>
+                    <input type="password" id="login-password" placeholder="Password" required>
+                    <button type="submit">Login</button>
+                    <div class="error-msg"></div>
+                </form>
+                <form id="register-form" style="display:none">
+                    <input type="text" id="reg-name" placeholder="Full Name" required>
+                    <input type="text" id="reg-username" placeholder="Username" required>
+                    <input type="email" id="reg-email" placeholder="Email" required>
+                    <input type="password" id="reg-password" placeholder="Password" required>
+                    <button type="submit">Register</button>
+                    <div class="error-msg"></div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Dashboard (shown after login) -->
+        <div id="dashboard" style="display:none">
+            <nav class="navbar">
+                <div class="logo">🎬 MovieAdmin</div>
+                <div class="user-info">
+                    <span id="user-role"></span>
+                    <button id="logout-btn">Logout</button>
+                </div>
+            </nav>
+            <div class="sidebar">
+                <ul>
+                    <li data-view="movies">Movies</li>
+                    <li data-view="stats">Stats</li>
+                    <li data-view="users" id="admin-users-menu" style="display:none">Users</li>
+                    <li data-view="upload" id="admin-upload-menu" style="display:none">Upload JSON</li>
+                </ul>
+            </div>
+            <div class="main-content">
+                <div id="view-container"></div>
+            </div>
+        </div>
+    </div>
+    <script src="/js/main.js"></script>
+</body>
+</html>
