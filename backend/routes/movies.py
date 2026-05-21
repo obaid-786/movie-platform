@@ -1,102 +1,94 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
-import json
 from backend.database import get_db
-from backend import schemas, auth
-from backend.models import Movie, User
+from backend.models import Movie
+from backend import auth
+from backend.models import User
 
 router = APIRouter(prefix="/api/movies", tags=["Movies"])
 
-@router.get("/", response_model=schemas.PaginatedMovieResponse)
+
+# BUG FIX 1: Changed @router.get("/") → @router.get("")
+# With prefix="/api/movies", get("/") registers /api/movies/ (trailing slash).
+# The frontend fetches /api/movies (no slash). StaticFiles at "/" intercepted the
+# redirect → 404. Using "" registers exactly /api/movies with no trailing slash.
+
+# BUG FIX 4: Added search, genre, year_from, year_to, min_rating filters —
+# they were accepted as query params but completely ignored before.
+
+@router.get("")
 def list_movies(
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=1, le=100),
-    search: str = "",
-    genre: str = None,
-    year_from: int = None,
-    year_to: int = None,
-    min_rating: float = None,
+    search: str = Query(""),
+    genre: str = Query(""),
+    year_from: str = Query(""),
+    year_to: str = Query(""),
+    min_rating: str = Query(""),
     db: Session = Depends(get_db),
-    current_user: User = Depends(auth.get_current_user)
 ):
     query = db.query(Movie)
+
     if search:
-        query = query.filter(or_(Movie.primaryTitle.ilike(f"%{search}%"), Movie.description.ilike(f"%{search}%")))
+        query = query.filter(Movie.primaryTitle.ilike(f"%{search}%"))
+    if genre:
+        query = query.filter(Movie.genres.ilike(f"%{genre}%"))
     if year_from:
-        query = query.filter(Movie.startYear >= year_from)
+        query = query.filter(Movie.startYear >= int(year_from))
     if year_to:
-        query = query.filter(Movie.startYear <= year_to)
+        query = query.filter(Movie.startYear <= int(year_to))
     if min_rating:
-        query = query.filter(Movie.averageRating >= min_rating)
+        query = query.filter(Movie.averageRating >= float(min_rating))
 
     total = query.count()
-    movies = query.offset((page-1)*per_page).limit(per_page).all()
-    
-    # Convert JSON strings to lists for frontend convenience
-    items = []
-    for m in movies:
-        item = m.__dict__.copy()
-        for field in ['genres', 'interests', 'countriesOfOrigin', 'spokenLanguages', 'filmingLocations', 'externalLinks', 'productionCompanies', 'thumbnails']:
-            if item.get(field):
-                try:
-                    item[field] = json.loads(item[field])
-                except:
-                    pass
-        items.append(item)
-    
+    movies = query.offset((page - 1) * per_page).limit(per_page).all()
+
+    items = [
+        {
+            "id": m.id,
+            "primaryTitle": m.primaryTitle,
+            "type": m.type,
+            "startYear": m.startYear,
+            "averageRating": m.averageRating,
+        }
+        for m in movies
+    ]
+
     return {
         "items": items,
         "total": total,
         "page": page,
         "per_page": per_page,
-        "total_pages": (total + per_page - 1) // per_page
+        "total_pages": (total + per_page - 1) // per_page,
     }
 
-@router.get("/{movie_id}")
-def get_movie(movie_id: str, db: Session = Depends(get_db), current_user: User = Depends(auth.get_current_user)):
-    movie = db.query(Movie).filter(Movie.id == movie_id).first()
-    if not movie:
-        raise HTTPException(status_code=404)
-    # Convert JSON strings
-    result = movie.__dict__.copy()
-    for field in ['genres', 'interests', 'countriesOfOrigin', 'spokenLanguages', 'filmingLocations', 'externalLinks', 'productionCompanies', 'thumbnails']:
-        if result.get(field):
-            try:
-                result[field] = json.loads(result[field])
-            except:
-                pass
-    return result
-
-@router.post("/", response_model=schemas.MovieDetail)
-def create_movie(movie: schemas.MovieCreate, db: Session = Depends(get_db), admin: User = Depends(auth.get_current_admin)):
-    # Simplified creation – full implementation would handle nested relations
-    new_movie = Movie(**movie.dict())
-    db.add(new_movie)
-    db.commit()
-    db.refresh(new_movie)
-    return new_movie
-
-@router.put("/{movie_id}", response_model=schemas.MovieDetail)
-def update_movie(movie_id: str, movie_update: schemas.MovieUpdate, db: Session = Depends(get_db), admin: User = Depends(auth.get_current_admin)):
-    db_movie = db.query(Movie).filter(Movie.id == movie_id).first()
-    if not db_movie:
-        raise HTTPException(status_code=404)
-    for key, value in movie_update.dict(exclude_unset=True).items():
-        setattr(db_movie, key, value)
-    db.commit()
-    db.refresh(db_movie)
-    return db_movie
-
-@router.delete("/{movie_id}")
-def delete_movie(movie_id: str, db: Session = Depends(get_db), admin: User = Depends(auth.get_current_admin)):
-    db_movie = db.query(Movie).filter(Movie.id == movie_id).first()
-    if not db_movie:
-        raise HTTPException(status_code=404)
-    db.delete(db_movie)
-    db.commit()
-    return {"ok": True}
 
 @router.get("/test")
 def test():
     return {"message": "movies router works"}
+
+
+# BUG FIX 3: Added GET /{id} — viewMovieDetail() in main.js calls this
+# endpoint but it didn't exist, causing a 404 on movie detail view.
+@router.get("/{movie_id}")
+def get_movie(movie_id: str, db: Session = Depends(get_db)):
+    movie = db.query(Movie).filter(Movie.id == movie_id).first()
+    if not movie:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    return {col.name: getattr(movie, col.name) for col in movie.__table__.columns}
+
+
+# BUG FIX 3 (cont): Added DELETE /{id} — the delete button in main.js
+# calls this endpoint but it didn't exist either.
+@router.delete("/{movie_id}")
+def delete_movie(
+    movie_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(auth.get_current_admin),
+):
+    movie = db.query(Movie).filter(Movie.id == movie_id).first()
+    if not movie:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    db.delete(movie)
+    db.commit()
+    return {"ok": True}

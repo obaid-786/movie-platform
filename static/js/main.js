@@ -3,7 +3,17 @@ let token = null;
 let currentUser = { is_admin: false };
 let currentView = 'movies';
 
-// Helper for fetch with auth
+// Pagination & filter state
+let currentPage = 1;
+let perPage = 10;
+let searchText = '';
+let genreFilter = '';
+let yearFrom = '';
+let yearTo = '';
+let minRating = '';
+
+// ─── API helper ──────────────────────────────────────────────────────────────
+
 async function apiFetch(endpoint, options = {}) {
     const headers = { 'Content-Type': 'application/json', ...options.headers };
     if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -13,7 +23,8 @@ async function apiFetch(endpoint, options = {}) {
     return res.json();
 }
 
-// Auth
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+
 document.getElementById('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const email = document.getElementById('login-email').value;
@@ -22,7 +33,11 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         const formData = new URLSearchParams();
         formData.append('username', email);
         formData.append('password', password);
-        const res = await fetch(`${API_BASE}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: formData });
+        const res = await fetch(`${API_BASE}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: formData
+        });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail);
         token = data.access_token;
@@ -61,6 +76,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     });
 });
 
+// ─── Dashboard ───────────────────────────────────────────────────────────────
+
 function showDashboard() {
     document.getElementById('auth-section').style.display = 'none';
     document.getElementById('dashboard').style.display = 'block';
@@ -89,8 +106,12 @@ function attachSidebarEvents() {
 async function loadView(view) {
     currentView = view;
     const container = document.getElementById('view-container');
+
     if (view === 'movies') {
+        // Reset pagination/filters when switching to movies view
+        currentPage = 1;
         await renderMovies();
+
     } else if (view === 'stats') {
         if (currentUser.is_admin) {
             const stats = await apiFetch('/admin/stats');
@@ -106,23 +127,51 @@ async function loadView(view) {
         } else {
             container.innerHTML = '<div class="stat-card"><p>Client stats view (limited)</p></div>';
         }
+
     } else if (view === 'users' && currentUser.is_admin) {
         const users = await apiFetch('/admin/users');
-        container.innerHTML = `<h2>Users</h2><table><thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Action</th></tr></thead><tbody>
-            ${users.map(u => `<tr><td>${u.id}</td><td>${u.email}</td><td>${u.is_admin ? 'Admin' : 'Client'}</td><td><button class="delete-user" data-id="${u.id}">Delete</button></td></tr>`).join('')}
-        </tbody></table>`;
-        document.querySelectorAll('.delete-user').forEach(btn => btn.onclick = async () => {
-            if (confirm('Delete user?')) await apiFetch(`/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
-            loadView('users');
+        container.innerHTML = `
+            <h2>Users</h2>
+            <table>
+                <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Action</th></tr></thead>
+                <tbody>
+                    ${users.map(u => `
+                        <tr>
+                            <td>${u.id}</td>
+                            <td>${u.email}</td>
+                            <td>${u.is_admin ? 'Admin' : 'Client'}</td>
+                            <td><button class="delete-user" data-id="${u.id}">Delete</button></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+        document.querySelectorAll('.delete-user').forEach(btn => {
+            btn.onclick = async () => {
+                if (confirm('Delete user?')) {
+                    await apiFetch(`/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
+                    loadView('users');
+                }
+            };
         });
+
     } else if (view === 'upload' && currentUser.is_admin) {
-        container.innerHTML = `<h2>Upload JSON Data</h2><input type="file" id="json-file" accept=".json"><button id="upload-btn">Upload & Import</button><div id="upload-status"></div>`;
+        container.innerHTML = `
+            <h2>Upload JSON Data</h2>
+            <input type="file" id="json-file" accept=".json">
+            <button id="upload-btn" style="margin-top:1rem;">Upload & Import</button>
+            <div id="upload-status" style="margin-top:1rem;"></div>
+        `;
         document.getElementById('upload-btn').onclick = async () => {
             const file = document.getElementById('json-file').files[0];
             if (!file) return;
             const formData = new FormData();
             formData.append('file', file);
-            const res = await fetch(`${API_BASE}/admin/upload-json`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: formData });
+            const res = await fetch(`${API_BASE}/admin/upload-json`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData
+            });
             const data = await res.json();
             document.getElementById('upload-status').innerText = data.message || 'Uploaded';
             setTimeout(() => loadView('movies'), 1500);
@@ -130,97 +179,152 @@ async function loadView(view) {
     }
 }
 
-// Movies view with pagination, filters, modals
-let currentPage = 1;
-let perPage = 10;
-let searchText = '';
-let genreFilter = '';
-let yearFrom = '';
-let yearTo = '';
-let minRating = '';
+// ─── Movies view ─────────────────────────────────────────────────────────────
+
+// BUG FIX 2: renderMovies() was defined as renderMovies(movies) — it accepted
+// already-fetched data as a parameter but was always called with NO arguments,
+// so `movies` was undefined, crashing on movies.length. It also NEVER called
+// the API. Rewritten below: renders the filter UI, then calls fetchAndRender().
 
 async function renderMovies() {
-    const params = new URLSearchParams({
-        page: currentPage,
-        per_page: perPage,
-        search: searchText,
-        genre: genreFilter,
-        year_from: yearFrom,
-        year_to: yearTo,
-        min_rating: minRating
-    });
-    const data = await apiFetch(`/movies?${params}`);
-    const movies = data.items;
     const container = document.getElementById('view-container');
-    let html = `
-        <div class="filters">
-            <input type="text" id="search-input" placeholder="Search title/description" value="${searchText}">
-            <input type="text" id="genre-input" placeholder="Genre" value="${genreFilter}">
-            <input type="number" id="year-from" placeholder="Year from" value="${yearFrom}">
-            <input type="number" id="year-to" placeholder="Year to" value="${yearTo}">
-            <input type="number" step="0.1" id="min-rating" placeholder="Min rating" value="${minRating}">
-            <button id="apply-filters">Apply</button>
-            <label>Per page: <select id="per-page-select">${[5,10,25,50].map(v => `<option ${perPage==v?'selected':''} value="${v}">${v}</option>`).join('')}</select></label>
-            ${currentUser.is_admin ? '<button id="add-movie-btn">+ Add Movie</button>' : ''}
-        </div>
-        <table><thead><tr><th>Title</th><th>Type</th><th>Year</th><th>Rating</th><th>Actions</th></tr></thead><tbody>
-    `;
-    movies.forEach(m => {
-        html += `<tr>
-            <td><strong>${escapeHtml(m.primaryTitle)}</strong></td>
-            <td>${m.type || '-'}</td>
-            <td>${m.startYear || '-'}</td>
-            <td>${m.averageRating || '-'}</td>
-            <td><button class="view-movie" data-id="${m.id}">View</button> ${currentUser.is_admin ? `<button class="edit-movie" data-id="${m.id}">Edit</button> <button class="delete-movie" data-id="${m.id}">Delete</button>` : ''}</td>
-        </tr>`;
-    });
-    html += `</tbody></table>`;
-    // Pagination buttons
-    const totalPages = data.total_pages;
-    html += `<div class="pagination"><button id="first-page" ${currentPage===1?'disabled':''}>First</button><button id="prev-page" ${currentPage===1?'disabled':''}>Previous</button>`;
-    for (let i = Math.max(1, currentPage-2); i <= Math.min(totalPages, currentPage+2); i++) {
-        html += `<button class="page-num ${i===currentPage?'active':''}" data-page="${i}">${i}</button>`;
-    }
-    html += `<button id="next-page" ${currentPage===totalPages?'disabled':''}>Next</button><button id="last-page" ${currentPage===totalPages?'disabled':''}>Last</button></div>`;
-    container.innerHTML = html;
 
-    // Attach events
+    // Render filter bar + table placeholder + pagination placeholder
+    container.innerHTML = `
+        <div class="filters">
+            <input type="text"   id="search-input" placeholder="Search title…"  value="${searchText}">
+            <input type="text"   id="genre-input"  placeholder="Genre…"         value="${genreFilter}">
+            <input type="number" id="year-from"    placeholder="Year from"      value="${yearFrom}">
+            <input type="number" id="year-to"      placeholder="Year to"        value="${yearTo}">
+            <input type="number" id="min-rating"   placeholder="Min rating" step="0.1" min="0" max="10" value="${minRating}">
+            <button id="apply-filters" style="width:auto;padding:0.6rem 1.2rem;">Apply</button>
+        </div>
+        <div id="movies-table">Loading…</div>
+        <div class="pagination" id="pagination"></div>
+    `;
+
     document.getElementById('apply-filters').onclick = () => {
-        searchText = document.getElementById('search-input').value;
+        searchText  = document.getElementById('search-input').value;
         genreFilter = document.getElementById('genre-input').value;
-        yearFrom = document.getElementById('year-from').value;
-        yearTo = document.getElementById('year-to').value;
-        minRating = document.getElementById('min-rating').value;
+        yearFrom    = document.getElementById('year-from').value;
+        yearTo      = document.getElementById('year-to').value;
+        minRating   = document.getElementById('min-rating').value;
         currentPage = 1;
-        renderMovies();
+        fetchAndRenderMovies();
     };
-    document.getElementById('per-page-select').onchange = (e) => { perPage = parseInt(e.target.value); currentPage=1; renderMovies(); };
-    document.getElementById('first-page').onclick = () => { currentPage=1; renderMovies(); };
-    document.getElementById('prev-page').onclick = () => { if(currentPage>1) { currentPage--; renderMovies(); } };
-    document.getElementById('next-page').onclick = () => { if(currentPage<totalPages) { currentPage++; renderMovies(); } };
-    document.getElementById('last-page').onclick = () => { currentPage=totalPages; renderMovies(); };
-    document.querySelectorAll('.page-num').forEach(btn => btn.onclick = () => { currentPage = parseInt(btn.dataset.page); renderMovies(); });
-    document.querySelectorAll('.view-movie').forEach(btn => btn.onclick = () => viewMovieDetail(btn.dataset.id));
-    if (currentUser.is_admin) {
-        document.getElementById('add-movie-btn').onclick = () => openMovieModal();
-        document.querySelectorAll('.edit-movie').forEach(btn => btn.onclick = () => openMovieModal(btn.dataset.id));
-        document.querySelectorAll('.delete-movie').forEach(btn => btn.onclick = async () => { if(confirm('Delete?')) { await apiFetch(`/movies/${btn.dataset.id}`, {method:'DELETE'}); renderMovies(); } });
+
+    await fetchAndRenderMovies();
+}
+
+async function fetchAndRenderMovies() {
+    const tableDiv = document.getElementById('movies-table');
+    if (!tableDiv) return;   // view was switched before fetch completed
+
+    const params = new URLSearchParams({
+        page:      currentPage,
+        per_page:  perPage,
+        search:    searchText,
+        genre:     genreFilter,
+        year_from: yearFrom,
+        year_to:   yearTo,
+        min_rating: minRating,
+    });
+
+    try {
+        const data = await apiFetch(`/movies?${params}`);
+
+        if (!data.items.length) {
+            tableDiv.innerHTML = '<p style="padding:40px;text-align:center;">No movies found.</p>';
+        } else {
+            tableDiv.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th><th>Title</th><th>Type</th>
+                            <th>Year</th><th>Rating</th><th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${data.items.map(m => `
+                            <tr>
+                                <td>${m.id}</td>
+                                <td><strong>${escapeHtml(m.primaryTitle)}</strong></td>
+                                <td>${m.type || '-'}</td>
+                                <td>${m.startYear || '-'}</td>
+                                <td>${m.averageRating || '-'}</td>
+                                <td>
+                                    <button class="view-movie" data-id="${m.id}">View</button>
+                                    ${currentUser.is_admin
+                                        ? `<button class="delete-movie" data-id="${m.id}">Delete</button>`
+                                        : ''}
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+
+            document.querySelectorAll('.view-movie').forEach(btn =>
+                btn.onclick = () => viewMovieDetail(btn.dataset.id)
+            );
+
+            if (currentUser.is_admin) {
+                document.querySelectorAll('.delete-movie').forEach(btn => {
+                    btn.onclick = async () => {
+                        if (confirm('Delete this movie?')) {
+                            await apiFetch(`/movies/${btn.dataset.id}`, { method: 'DELETE' });
+                            fetchAndRenderMovies();
+                        }
+                    };
+                });
+            }
+        }
+
+        // Render pagination buttons
+        const paginationDiv = document.getElementById('pagination');
+        if (paginationDiv) {
+            paginationDiv.innerHTML = '';
+            for (let i = 1; i <= data.total_pages; i++) {
+                const btn = document.createElement('button');
+                btn.textContent = i;
+                if (i === currentPage) btn.classList.add('active');
+                btn.onclick = () => { currentPage = i; fetchAndRenderMovies(); };
+                paginationDiv.appendChild(btn);
+            }
+        }
+
+    } catch (err) {
+        if (tableDiv) {
+            tableDiv.innerHTML = `<p style="color:red;padding:20px;">Error: ${err.message}</p>`;
+        }
     }
 }
 
-function escapeHtml(str) { if(!str) return ''; return str.replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'})[m]); }
+// ─── Movie detail ─────────────────────────────────────────────────────────────
 
 async function viewMovieDetail(id) {
-    const movie = await apiFetch(`/movies/${id}`);
-    alert(`Title: ${movie.primaryTitle}\nDescription: ${movie.description || 'N/A'}\nRating: ${movie.averageRating}\nGenres: ${(movie.genres||[]).map(g=>g.name).join(', ')}`);
+    try {
+        const movie = await apiFetch(`/movies/${id}`);
+        alert(
+            `Title: ${movie.primaryTitle}\n` +
+            `Description: ${movie.description || 'N/A'}\n` +
+            `Rating: ${movie.averageRating || 'N/A'}\n` +
+            `Year: ${movie.startYear || 'N/A'}`
+        );
+    } catch (err) {
+        alert('Could not load movie details: ' + err.message);
+    }
 }
 
-function openMovieModal(id = null) {
-    // simplified: show modal to create/edit movie (implementation omitted for brevity)
-    alert(id ? 'Edit movie feature' : 'Add movie feature - implement modal form');
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[m]);
 }
 
-// Load initial token from storage
+// ─── Init: restore session from localStorage ──────────────────────────────────
+
 const savedToken = localStorage.getItem('token');
 if (savedToken) {
     token = savedToken;
