@@ -3,18 +3,17 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from backend.database import get_db
 from backend.models import Movie, User
-from backend import auth
 import json
 from backend.utils.import_json import import_movies_from_json
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 
+# AUTH REMOVED: all routes below previously required Depends(auth.get_current_admin).
+# This app no longer has user accounts — every route here is now open to anyone.
+
 @router.get("/stats")
-def get_stats(
-    db: Session = Depends(get_db),
-    admin: User = Depends(auth.get_current_admin),
-):
+def get_stats(db: Session = Depends(get_db)):
     total_movies = db.query(Movie).count()
     total_users = db.query(User).count()
     avg_rating = db.query(func.avg(Movie.averageRating)).scalar()
@@ -36,7 +35,6 @@ def get_stats(
 async def upload_json(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    admin: User = Depends(auth.get_current_admin),
 ):
     if not file.filename.endswith(".json"):
         raise HTTPException(400, "Only JSON files allowed")
@@ -47,10 +45,7 @@ async def upload_json(
 
 
 @router.get("/users")
-def list_users(
-    db: Session = Depends(get_db),
-    admin: User = Depends(auth.get_current_admin),
-):
+def list_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
     return users
 
@@ -59,7 +54,6 @@ def list_users(
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    admin: User = Depends(auth.get_current_admin),
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

@@ -1,6 +1,8 @@
 const API_BASE = '/api';
-let token = null;
-let currentUser = { is_admin: false };
+// AUTH REMOVED: this app has no user accounts anymore. Everyone is treated
+// as an "admin" so all UI controls (delete buttons, users tab, upload tab,
+// full stats) are shown to every visitor.
+let currentUser = { is_admin: true };
 let currentView = 'movies';
 
 // Pagination & filter state
@@ -16,84 +18,20 @@ let minRating = '';
 
 async function apiFetch(endpoint, options = {}) {
     const headers = { 'Content-Type': 'application/json', ...options.headers };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
     const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
-    if (res.status === 401) { logout(); throw new Error('Session expired'); }
     if (!res.ok) throw new Error(await res.text());
     return res.json();
 }
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
-
-document.getElementById('login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email    = document.getElementById('login-email').value;
-    const password = document.getElementById('login-password').value;
-    try {
-        const formData = new URLSearchParams();
-        formData.append('username', email);
-        formData.append('password', password);
-        const res = await fetch(`${API_BASE}/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: formData
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail);
-        token = data.access_token;
-        currentUser.is_admin = data.is_admin;
-        localStorage.setItem('token', token);
-        localStorage.setItem('is_admin', data.is_admin);
-        showDashboard();
-    } catch (err) {
-        document.querySelector('#login-form .error-msg').innerText = err.message;
-    }
-});
-
-document.getElementById('register-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const payload = {
-        full_name: document.getElementById('reg-name').value,
-        username:  document.getElementById('reg-username').value,
-        email:     document.getElementById('reg-email').value,
-        password:  document.getElementById('reg-password').value
-    };
-    try {
-        await apiFetch('/auth/register', { method: 'POST', body: JSON.stringify(payload) });
-        alert('Registration successful! Please login.');
-        document.querySelector('.tab-btn[data-tab="login"]').click();
-    } catch (err) { alert(err.message); }
-});
-
-document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const tab = btn.dataset.tab;
-        document.getElementById('login-form').style.display    = tab === 'login'    ? 'block' : 'none';
-        document.getElementById('register-form').style.display = tab === 'register' ? 'block' : 'none';
-    });
-});
-
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 
 function showDashboard() {
-    document.getElementById('auth-section').style.display = 'none';
-    document.getElementById('dashboard').style.display    = 'block';
-    document.getElementById('user-role').innerText        = currentUser.is_admin ? 'Admin' : 'Client';
-    if (currentUser.is_admin) {
-        document.getElementById('admin-users-menu').style.display  = 'block';
-        document.getElementById('admin-upload-menu').style.display = 'block';
-    }
+    document.getElementById('dashboard').style.display = 'block';
+    document.getElementById('user-role').innerText      = 'Admin';
+    document.getElementById('admin-users-menu').style.display  = 'block';
+    document.getElementById('admin-upload-menu').style.display = 'block';
     loadView('movies');
     attachSidebarEvents();
-    document.getElementById('logout-btn').onclick = logout;
-}
-
-function logout() {
-    localStorage.clear();
-    token = null;
-    location.reload();
 }
 
 function attachSidebarEvents() {
@@ -111,22 +49,18 @@ async function loadView(view) {
         await renderMovies();
 
     } else if (view === 'stats') {
-        if (currentUser.is_admin) {
-            const stats = await apiFetch('/admin/stats');
-            container.innerHTML = `
-                <div class="stats-grid">
-                    <div class="stat-card"><h3>Total Movies</h3><p>${stats.total_movies}</p></div>
-                    <div class="stat-card"><h3>Total Users</h3><p>${stats.total_users}</p></div>
-                    <div class="stat-card"><h3>Avg Rating</h3><p>${stats.average_rating.toFixed(1)}</p></div>
-                </div>
-                <h3>Type Distribution</h3>
-                <ul>${stats.type_distribution.map(t => `<li>${t.type}: ${t.count}</li>`).join('')}</ul>
-            `;
-        } else {
-            container.innerHTML = '<div class="stat-card"><p>Client stats view (limited)</p></div>';
-        }
+        const stats = await apiFetch('/admin/stats');
+        container.innerHTML = `
+            <div class="stats-grid">
+                <div class="stat-card"><h3>Total Movies</h3><p>${stats.total_movies}</p></div>
+                <div class="stat-card"><h3>Total Users</h3><p>${stats.total_users}</p></div>
+                <div class="stat-card"><h3>Avg Rating</h3><p>${stats.average_rating.toFixed(1)}</p></div>
+            </div>
+            <h3>Type Distribution</h3>
+            <ul>${stats.type_distribution.map(t => `<li>${t.type}: ${t.count}</li>`).join('')}</ul>
+        `;
 
-    } else if (view === 'users' && currentUser.is_admin) {
+    } else if (view === 'users') {
         const users = await apiFetch('/admin/users');
         container.innerHTML = `
             <h2>Users</h2>
@@ -153,7 +87,7 @@ async function loadView(view) {
             };
         });
 
-    } else if (view === 'upload' && currentUser.is_admin) {
+    } else if (view === 'upload') {
         container.innerHTML = `
             <h2>Upload JSON Data</h2>
             <input type="file" id="json-file" accept=".json">
@@ -167,7 +101,6 @@ async function loadView(view) {
             formData.append('file', file);
             const res = await fetch(`${API_BASE}/admin/upload-json`, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` },
                 body: formData
             });
             const data = await res.json();
@@ -237,9 +170,7 @@ async function fetchAndRenderMovies() {
                                 <td>${m.averageRating || '-'}</td>
                                 <td>
                                     <button class="view-movie" data-id="${m.id}">View</button>
-                                    ${currentUser.is_admin
-                                        ? `<button class="delete-movie" data-id="${m.id}">Delete</button>`
-                                        : ''}
+                                    <button class="delete-movie" data-id="${m.id}">Delete</button>
                                 </td>
                             </tr>
                         `).join('')}
@@ -249,16 +180,14 @@ async function fetchAndRenderMovies() {
             document.querySelectorAll('.view-movie').forEach(btn =>
                 btn.onclick = () => viewMovieDetail(btn.dataset.id)
             );
-            if (currentUser.is_admin) {
-                document.querySelectorAll('.delete-movie').forEach(btn => {
-                    btn.onclick = async () => {
-                        if (confirm('Delete this movie?')) {
-                            await apiFetch(`/movies/${btn.dataset.id}`, { method: 'DELETE' });
-                            fetchAndRenderMovies();
-                        }
-                    };
-                });
-            }
+            document.querySelectorAll('.delete-movie').forEach(btn => {
+                btn.onclick = async () => {
+                    if (confirm('Delete this movie?')) {
+                        await apiFetch(`/movies/${btn.dataset.id}`, { method: 'DELETE' });
+                        fetchAndRenderMovies();
+                    }
+                };
+            });
         }
 
         const paginationDiv = document.getElementById('pagination');
@@ -496,10 +425,5 @@ function escapeHtml(str) {
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
-
-const savedToken = localStorage.getItem('token');
-if (savedToken) {
-    token = savedToken;
-    currentUser.is_admin = localStorage.getItem('is_admin') === 'true';
-    showDashboard();
-}
+// AUTH REMOVED: app now opens straight into the dashboard, no login gate.
+showDashboard();

@@ -2,8 +2,6 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import Movie
-from backend import auth
-from backend.models import User
 
 router = APIRouter(prefix="/api/movies", tags=["Movies"])
 
@@ -80,11 +78,13 @@ def get_movie(movie_id: str, db: Session = Depends(get_db)):
 
 # BUG FIX 3 (cont): Added DELETE /{id} — the delete button in main.js
 # calls this endpoint but it didn't exist either.
+# AUTH REMOVED: this app no longer has user accounts, so the admin check
+# (Depends(auth.get_current_admin)) has been dropped — this endpoint is
+# now open to anyone who can reach it.
 @router.delete("/{movie_id}")
 def delete_movie(
     movie_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(auth.get_current_admin),
 ):
     movie = db.query(Movie).filter(Movie.id == movie_id).first()
     if not movie:
